@@ -18,80 +18,35 @@ class DataFormatException implements Exception {
 }
 
 class RPFhirQuestionnaire {
-  String _getText(QuestionnaireItem item) {
-    return item.textElement?.extension_?.elementAt(0).valueString ??
-        item.text ??
-        item.linkId ??
-        item.toString();
-  }
+  RPFhirQuestionnaire.fromString(String stringFhirQuestionnaire)
+      : _questionnaire =
+            Questionnaire.fromJson(json.decode(stringFhirQuestionnaire));
+
+  RPFhirQuestionnaire.fromJson(Map<String, dynamic> jsonFhirQuestionnaire)
+      : _questionnaire = Questionnaire.fromJson(jsonFhirQuestionnaire);
+
+  RPFhirQuestionnaire.fromQuestionnaire(Questionnaire fhirQuestionnaire)
+      : _questionnaire = fhirQuestionnaire;
 
   final Questionnaire _questionnaire;
+  final double _minDecimal = 0;
+  final double _maxDecimal = 999999999999; // 1 trillion - 1
+  final int _minInt = 0;
+  final int _maxInt = 999999999; // 1 billion - 1
 
-  RPAnswerFormat _buildChoiceAnswers(QuestionnaireItem element) {
-    var choices = <RPChoice>[];
-
-    if (element.answerValueSet != null) {
-      final key = element.answerValueSet!.value!
-          .toString()
-          .substring(1); // Strip off leading '#'
-      var i = 0;
-      final List<ValueSetConcept>? valueSetConcepts = (_questionnaire.contained
-              ?.firstWhere((element) => (key == element?.id?.toString()),
-                  orElse: () => null) as ValueSet?)
-          ?.compose
-          ?.include
-          ?.firstOrNull
-          ?.concept;
-
-      if (valueSetConcepts == null)
-        throw DataFormatException(
-            'Questionnaire does not contain referenced ValueSet $key',
-            _questionnaire);
-
-      valueSetConcepts.forEach((element) {
-        choices.add(RPChoice.withParams(element.display, i++));
-      });
-    } else {
-      var i =
-          0; // TODO: Don't forget to put the real values back into the response...
-      element.answerOption?.forEach((choice) {
-        choices.add(RPChoice.withParams(choice.safeDisplay, i++));
-      });
-    }
-
-    return RPChoiceAnswerFormat.withParams(
-        ChoiceAnswerStyle.SingleChoice, choices);
+  RPOrderedTask surveyTask() {
+    return RPOrderedTask(
+      'surveyTaskID',
+      [..._rpStepsFromFhirQuestionnaire(), completionStep()],
+    );
   }
 
-  List<RPQuestionStep> _buildQuestionSteps(QuestionnaireItem item, int level) {
-    final steps = <RPQuestionStep>[];
-
-    final optional = !(item.required_?.value ?? true);
-
-    switch (item.type) {
-      case QuestionnaireItemType.choice:
-        steps.add(RPQuestionStep.withAnswerFormat(
-            item.linkId, _getText(item), _buildChoiceAnswers(item),
-            optional: optional));
-        break;
-      case QuestionnaireItemType.string:
-        steps.add(RPQuestionStep.withAnswerFormat(
-            item.linkId,
-            _getText(item),
-            RPChoiceAnswerFormat.withParams(ChoiceAnswerStyle.SingleChoice,
-                [RPChoice.withParams(_getText(item), 0, true)]),
-            optional: optional));
-        break;
-      case QuestionnaireItemType.decimal:
-        steps.add(RPQuestionStep.withAnswerFormat(item.linkId, _getText(item),
-            RPIntegerAnswerFormat.withParams(0, 999999),
-            optional:
-                optional)); // Unfortunately, surveys are using "Decimal" when they are clearly expecting integers.
-        break;
-      default:
-        print('Unsupported question item type: ${item.type.toString()}');
-    }
-    return steps;
+  List<RPStep> _rpStepsFromFhirQuestionnaire() {
+    final toplevelSteps = <RPStep>[];
+    _questionnaire.item!.forEach((item) {
+      toplevelSteps.addAll(_buildSteps(item, 0));
+    });
+    return toplevelSteps;
   }
 
   List<RPStep> _buildSteps(QuestionnaireItem item, int level) {
@@ -99,20 +54,37 @@ class RPFhirQuestionnaire {
 
     switch (item.type) {
       case QuestionnaireItemType.group:
-        steps.add(RPInstructionStep(
-          identifier: item.linkId,
-          detailText:
-              'Please fill out this survey.\n\nIn this survey the questions will come after each other in a given order. You still have the chance to skip some of them, though.',
-          title: item.code?.safeDisplay,
-        )..text = item.text);
+        {
+          steps.add(RPInstructionStep(
+            identifier: item.linkId,
+            detailText:
+                'Please fill out this survey.\n\nIn this survey the questions will come after each other in a given order. You still have the chance to skip some of them, though.',
+            title: item.code?.safeDisplay,
+          )..text = item.text);
 
-        item.item!.forEach((groupItem) {
-          steps.addAll(_buildSteps(groupItem, level + 1));
-        });
+          item.item!.forEach((groupItem) {
+            steps.addAll(_buildSteps(groupItem, level + 1));
+          });
+        }
         break;
-      case QuestionnaireItemType.choice:
-      case QuestionnaireItemType.string:
+      case QuestionnaireItemType.display:
+        {}
+        break;
+      case QuestionnaireItemType.boolean:
       case QuestionnaireItemType.decimal:
+      case QuestionnaireItemType.integer:
+      // case QuestionnaireItemType.date:
+      // case QuestionnaireItemType.datetime:
+      // case QuestionnaireItemType.time:
+      case QuestionnaireItemType.string:
+      case QuestionnaireItemType.text:
+      // case QuestionnaireItemType.url:
+      case QuestionnaireItemType.choice:
+      // case QuestionnaireItemType.open_choice:
+      // case QuestionnaireItemType.attachment:
+      // case QuestionnaireItemType.reference:
+      // case QuestionnaireItemType.quantity:
+      case QuestionnaireItemType.choice:
         steps.addAll(_buildQuestionSteps(item, level));
         break;
       default:
@@ -121,13 +93,126 @@ class RPFhirQuestionnaire {
     return steps;
   }
 
-  List<RPStep> _rpStepsFromFhirQuestionnaire() {
-    final toplevelSteps = <RPStep>[];
-    _questionnaire.item!.forEach((item) {
-      toplevelSteps.addAll(_buildSteps(item, 0));
-    });
+  List<RPQuestionStep> _buildQuestionSteps(QuestionnaireItem item, int level) {
+    final steps = <RPQuestionStep>[];
 
-    return toplevelSteps;
+    final optional = !(item.required_?.value ?? true);
+
+    switch (item.type) {
+      case QuestionnaireItemType.boolean:
+        {
+          steps.add(RPQuestionStep.withAnswerFormat(
+              item.linkId,
+              _getText(item),
+              RPChoiceAnswerFormat.withParams(
+                ChoiceAnswerStyle.SingleChoice,
+                [
+                  RPChoice.withParams('True', 0),
+                  RPChoice.withParams('False', 1)
+                ],
+              ),
+              optional: optional));
+        }
+        break;
+      case QuestionnaireItemType.decimal:
+        {
+          steps.add(RPQuestionStep.withAnswerFormat(
+              item.linkId,
+              _getText(item),
+              // TODO: make PR for research_package to allow doubles
+              RPIntegerAnswerFormat.withParams(_minInt, _maxInt),
+              optional: optional));
+          // Unfortunately, surveys are using "Decimal" when they are clearly expecting integers.
+        }
+        break;
+      case QuestionnaireItemType.integer:
+        {
+          steps.add(RPQuestionStep.withAnswerFormat(item.linkId, _getText(item),
+              RPIntegerAnswerFormat.withParams(_minInt, _maxInt),
+              optional: optional));
+        }
+        break;
+
+      /// Short (few words to short sentence) free-text answer
+      case QuestionnaireItemType.string:
+        {
+          steps.add(RPQuestionStep.withAnswerFormat(
+              item.linkId,
+              _getText(item),
+              RPChoiceAnswerFormat.withParams(ChoiceAnswerStyle.SingleChoice,
+                  [RPChoice.withParams(_getText(item), 0, true)]),
+              optional: optional));
+        }
+        break;
+
+      ///  Long (potentially multi-paragraph) free-text answer
+      case QuestionnaireItemType.text:
+        {
+          steps.add(RPQuestionStep.withAnswerFormat(
+              item.linkId,
+              _getText(item),
+              RPChoiceAnswerFormat.withParams(ChoiceAnswerStyle.SingleChoice,
+                  [RPChoice.withParams(_getText(item), 0, true)]),
+              optional: optional));
+        }
+        break;
+      case QuestionnaireItemType.choice:
+        {
+          steps.add(RPQuestionStep.withAnswerFormat(
+              item.linkId, _getText(item), _buildChoiceAnswers(item),
+              optional: optional));
+        }
+        break;
+
+      default:
+        print('Unsupported question item type: ${item.type.toString()}');
+    }
+    return steps;
+  }
+
+  /// checks if the textElement has a valueString, if that's null, it checks for
+  /// item.text, then item.linkId and finally changes the item to a String and
+  /// returns that value
+  String _getText(QuestionnaireItem item) {
+    return item.textElement?.extension_?.elementAt(0).valueString ??
+        item.text ??
+        item.linkId ??
+        item.toString();
+  }
+
+  RPAnswerFormat _buildChoiceAnswers(QuestionnaireItem item) {
+    var choices = <RPChoice>[];
+
+    if (item.answerValueSet != null) {
+      final key = item.answerValueSet!.value!
+          .toString()
+          .substring(1); // Strip off leading '#'
+      var i = 0;
+      final List<ValueSetConcept>? valueSetConcepts = (_questionnaire.contained
+              ?.firstWhere((item) => (key == item.id?.toString())) as ValueSet?)
+          ?.compose
+          ?.include
+          .firstOrNull
+          ?.concept;
+
+      if (valueSetConcepts == null)
+        throw DataFormatException(
+            'Questionnaire does not contain referenced ValueSet $key',
+            _questionnaire);
+
+      valueSetConcepts.forEach((item) {
+        choices.add(RPChoice.withParams(item.display, i++));
+      });
+    } else {
+      var i = 0;
+      // TODO: Don't forget to put the real values back into the response...
+      item.answerOption?.forEach((choice) {
+        choices.add(RPChoice.withParams(choice.safeDisplay, i++));
+      });
+    }
+
+    return RPChoiceAnswerFormat.withParams(
+        ChoiceAnswerStyle.SingleChoice, choices);
   }
 
   QuestionnaireResponseItem _fromGroupItem(
@@ -254,15 +339,4 @@ class RPFhirQuestionnaire {
       ..title = 'Finished'
       ..text = 'Thank you for filling out the survey!';
   }
-
-  RPOrderedTask surveyTask() {
-    return RPOrderedTask(
-      'surveyTaskID',
-      [..._rpStepsFromFhirQuestionnaire(), completionStep()],
-    );
-  }
-
-  RPFhirQuestionnaire(String jsonFhirQuestionnaire)
-      : _questionnaire =
-            Questionnaire.fromJson(json.decode(jsonFhirQuestionnaire));
 }

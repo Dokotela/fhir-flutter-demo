@@ -12,7 +12,7 @@ class SurveyPage extends StatelessWidget {
   final RPFhirQuestionnaire _questionnaire;
 
   SurveyPage(this.instrument)
-      : _questionnaire = RPFhirQuestionnaire(instrument);
+      : _questionnaire = RPFhirQuestionnaire.fromString(instrument);
 
   String _encode(Object object) =>
       const JsonEncoder.withIndent(' ').convert(object);

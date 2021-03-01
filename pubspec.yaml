@@ -38,7 +38,7 @@ dependencies:
       url: https://github.com/tiloc/research.package.git
       ref: styled_questions
 
-  simple_html_css: ^2.0.2
+  simple_html_css: ^3.0.0
 
   provider: ^5.0.0-nullsafety
 
